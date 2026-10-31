@@ -209,14 +209,23 @@ def register(payload: RegistrationRequest, db: Session = Depends(get_db)) -> dic
         seeded_faculty = db.scalar(
             select(Faculty).where(Faculty.tenant_id == tenant.id, Faculty.email == payload.email)
         )
+        unlinked_provisioned_student = (
+            settings.app_env == "production"
+            and seeded_student is not None
+            and seeded_student.auth_subject is None
+        )
         if (
             duplicate_account
             or seeded_membership
             or seeded_faculty
             or payload.email in DEMO_ADMIN_SUBJECTS
+            or unlinked_provisioned_student
             or (seeded_student is not None and (seeded_student.auth_subject is not None or seeded_student.status != "active"))
         ):
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="An account with this email already exists for this campus")
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="An account with this email already exists or requires authorized account provisioning",
+            )
 
         account = LocalAccount(
             tenant_id=tenant.id,
