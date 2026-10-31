@@ -78,9 +78,9 @@ def decode_cognito_id_token(token: str) -> dict[str, Any]:
 
 
 def create_demo_access_token(subject: str) -> str:
-    """Sign a short-lived local demo token; never use this issuer outside development."""
+    """Sign a short-lived token only in explicitly enabled development or staging."""
     secret = settings.demo_auth_secret
-    if settings.app_env != "development" or not settings.allow_dev_auth or not secret:
+    if not settings.local_demo_auth_enabled:
         raise HTTPException(status_code=404, detail="Local demo sign-in is not enabled")
     now = datetime.now(timezone.utc)
     return jwt.encode(
@@ -119,8 +119,8 @@ def get_current_principal(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Bearer token required")
 
     token = credentials.credentials
-    # This signed development identity is opt-in and cannot be enabled in cloud environments.
-    if settings.app_env == "development" and settings.allow_dev_auth:
+    # Demo identities are limited to explicitly opted-in development/staging environments.
+    if settings.local_demo_auth_enabled:
         claims = decode_demo_access_token(token)
         if claims.get("token_use") != "access":
             raise HTTPException(status_code=401, detail="Invalid development token")

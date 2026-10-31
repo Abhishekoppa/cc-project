@@ -122,12 +122,7 @@ def normalize_email(value: str) -> str:
 
 
 def local_demo_auth_enabled() -> bool:
-    return (
-        settings.app_env == "development"
-        and settings.allow_dev_auth
-        and bool(settings.demo_auth_password)
-        and bool(settings.demo_auth_secret)
-    )
+    return settings.local_demo_auth_enabled
 
 
 def get_active_tenant(db: Session, tenant_code: str) -> Tenant:

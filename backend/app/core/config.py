@@ -32,6 +32,15 @@ class Settings(BaseSettings):
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
 
     @property
+    def local_demo_auth_enabled(self) -> bool:
+        return (
+            self.app_env in {"development", "staging"}
+            and self.allow_dev_auth
+            and bool(self.demo_auth_password)
+            and bool(self.demo_auth_secret)
+        )
+
+    @property
     def resolved_database_url(self) -> str:
         if self.database_url:
             if self.app_env == "production" and make_url(self.database_url).query.get("sslmode") != "verify-full":

@@ -52,7 +52,8 @@ def test_production_authentication_rejects_missing_bearer_token() -> None:
 def test_development_identity_requires_explicit_development_flags(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "app_env", "development")
     monkeypatch.setattr(settings, "allow_dev_auth", True)
-    monkeypatch.setattr(settings, "demo_auth_secret", "local-demo-signing-secret-for-tests")
+    monkeypatch.setattr(settings, "demo_auth_password", "development-test-password")
+    monkeypatch.setattr(settings, "demo_auth_secret", "local-demo-signing-secret-for-tests-with-at-least-32-bytes")
     now = datetime.now(timezone.utc)
     signed = cognito.jwt.encode(
         {
@@ -79,6 +80,35 @@ def test_development_identity_requires_explicit_development_flags(monkeypatch: p
     monkeypatch.setattr(settings, "cognito_app_client_id", None)
     with pytest.raises(HTTPException) as exc:
         get_current_principal(token)
+    assert exc.value.status_code == 503
+
+
+def test_staging_identity_can_be_enabled_but_production_cannot(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "app_env", "staging")
+    monkeypatch.setattr(settings, "allow_dev_auth", True)
+    monkeypatch.setattr(settings, "demo_auth_password", "staging-demo-password")
+    monkeypatch.setattr(settings, "demo_auth_secret", "staging-demo-signing-secret-for-tests-with-at-least-32-bytes")
+    now = datetime.now(timezone.utc)
+    signed = cognito.jwt.encode(
+        {
+            "sub": "staging-test-user",
+            "iss": cognito.DEMO_TOKEN_ISSUER,
+            "iat": now,
+            "exp": now + timedelta(minutes=30),
+            "token_use": "access",
+        },
+        settings.demo_auth_secret,
+        algorithm="HS256",
+    )
+    credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials=signed)
+    assert get_current_principal(credentials).subject == "staging-test-user"
+
+    monkeypatch.setattr(settings, "app_env", "production")
+    monkeypatch.setattr(settings, "aws_region", None)
+    monkeypatch.setattr(settings, "cognito_user_pool_id", None)
+    monkeypatch.setattr(settings, "cognito_app_client_id", None)
+    with pytest.raises(HTTPException) as exc:
+        get_current_principal(credentials)
     assert exc.value.status_code == 503
 
 
