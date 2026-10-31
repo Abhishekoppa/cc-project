@@ -1,0 +1,28 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local Python environments
+.venv/
+venv/
+env/
+ENV/
+
+# Local environment variables and secrets
+.env
+.env.*
+!.env.example
+
+# Test and coverage output
+.coverage
+.coverage.*
+htmlcov/
+
+# Logs and editor/OS files
+*.log
+.DS_Store
+Thumbs.db
