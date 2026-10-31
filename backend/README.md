@@ -1,20 +1,33 @@
 # CampusCloud Backend
 
-## Local demo authentication in an isolated staging deployment
+## First-party password authentication
 
-Local demo authentication is allowed only when all of these backend settings are present:
+The API uses CampusCloud-managed accounts when `AUTH_PROVIDER=local` (the default). Public registration creates Student accounts only. Passwords are stored as salted scrypt hashes in PostgreSQL. The API issues short-lived signed access tokens; tenant and role permissions continue to come from active database memberships.
+
+Configure the backend with:
 
 ```text
-APP_ENV=staging
-ALLOW_DEV_AUTH=true
-DEMO_AUTH_PASSWORD=<unique strong staging-only password>
-DEMO_AUTH_SECRET=<random staging-only signing secret, at least 32 bytes>
+APP_ENV=production
+AUTH_PROVIDER=local
+AUTH_JWT_SECRET=<random secret with at least 32 bytes>
+AUTH_TOKEN_TTL_MINUTES=30
+DATABASE_SSLMODE=verify-full
 ```
 
-Use a dedicated staging service and a separate test database or isolated RDS database. Do not point staging at production records. Store both demo values in AWS Secrets Manager; do not put them in an image, source file, or public GitHub Actions variable. Restrict access to the staging URL (for example, with an IP allowlist or VPN).
+Store `AUTH_JWT_SECRET` in AWS Secrets Manager and inject it into the ECS task as a secret. Do not use `DEMO_AUTH_SECRET` or the shared `DEMO_AUTH_PASSWORD` for production accounts. Set `ALLOW_DEV_AUTH=false`; the shared seeded demo sign-in is limited to development/staging.
 
-Build the staging frontend with `VITE_DEMO_AUTH_ENABLED=true` (for Docker, pass `--build-arg VITE_DEMO_AUTH_ENABLED=true`). Keep production frontend builds at `false`.
+### Provisioning existing roles
 
-After configuring the staging environment, run the existing Alembic migrations and `python -m scripts.seed_demo` against the staging database. Seeded demo accounts use `DEMO_AUTH_PASSWORD`; registrations and role assignments remain stored in PostgreSQL.
+Public registration cannot create faculty, College Admin, or Super Admin accounts. First create the campus/student/faculty data, then provision each login through a trusted backend shell. The command prompts for the password without echoing it:
 
-The production configuration remains `APP_ENV=production` and `ALLOW_DEV_AUTH=false`. The backend rejects local demo tokens in production even if the demo flags are accidentally set; production sign-in uses Cognito.
+```powershell
+python -m scripts.provision_account --tenant-code VIT001 --email college.admin@vit.campuscloud.test --name "VIT College Admin" --role college_admin
+python -m scripts.provision_account --tenant-code VIT001 --email rajesh.sundaram@vit.edu --name "Dr. Rajesh Sundaram" --role faculty
+python -m scripts.provision_account --tenant-code VIT001 --email abhishek.poudel@vit.edu --name "Abhishek Poudel" --role student
+```
+
+The script creates or resets a tenant-scoped local account and active membership. Student and Faculty logins require a matching existing profile. Existing Cognito passwords cannot be migrated; provision local passwords for those accounts before switching traffic.
+
+### Important deployment limits
+
+Local registration currently does not verify email ownership. Login throttling, MFA, password-reset email, and session revocation are not implemented. This implementation is suitable for a controlled college demonstration after account provisioning; complete those controls before using it for public production accounts or sensitive records. OWASP recommends adaptive password hashing and login throttling; see its [password storage](https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html) and [authentication](https://cheatsheetseries.owasp.org/cheatsheets/Authentication_Cheat_Sheet.html) guidance.

@@ -1,5 +1,6 @@
 from urllib.parse import quote
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import make_url
 
@@ -17,6 +18,9 @@ class Settings(BaseSettings):
     database_password: str | None = None
     database_sslmode: str | None = None
     cors_origins: str = "http://localhost:5173"
+    auth_provider: str = "auto"
+    auth_jwt_secret: str | None = None
+    auth_token_ttl_minutes: int = Field(default=30, ge=5, le=120)
     allow_dev_auth: bool = False
     demo_auth_password: str | None = None
     demo_auth_secret: str | None = None
@@ -39,6 +43,28 @@ class Settings(BaseSettings):
             and bool(self.demo_auth_password)
             and bool(self.demo_auth_secret)
         )
+
+    @property
+    def auth_signing_secret(self) -> str | None:
+        if self.auth_jwt_secret and len(self.auth_jwt_secret.encode("utf-8")) >= 32:
+            return self.auth_jwt_secret
+        if self.app_env in {"development", "staging"} and self.demo_auth_secret:
+            return self.demo_auth_secret
+        return None
+
+    @property
+    def local_auth_enabled(self) -> bool:
+        return self.selected_auth_provider == "local" and self.auth_signing_secret is not None
+
+    @property
+    def selected_auth_provider(self) -> str:
+        if self.app_env == "production":
+            return "local"
+        if self.auth_provider in {"local", "cognito"}:
+            return self.auth_provider
+        if self.app_env in {"development", "staging"}:
+            return "local" if self.local_demo_auth_enabled else "cognito"
+        return "local"
 
     @property
     def resolved_database_url(self) -> str:

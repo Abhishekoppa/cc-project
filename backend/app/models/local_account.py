@@ -8,7 +8,7 @@ from app.models import Base
 
 
 class LocalAccount(Base):
-    """Tenant-scoped, development-only student credentials; passwords are stored only as hashes."""
+    """Tenant-scoped CampusCloud credentials; passwords are stored only as hashes."""
 
     __tablename__ = "local_accounts"
     __table_args__ = (

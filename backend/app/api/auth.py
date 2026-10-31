@@ -22,7 +22,7 @@ from app.models import (
     Student,
     Tenant,
 )
-from app.security.cognito import create_demo_access_token, decode_cognito_id_token
+from app.security.cognito import create_local_access_token, decode_cognito_id_token
 from app.security.passwords import hash_password, verify_password
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
@@ -188,7 +188,9 @@ def register(payload: RegistrationRequest, db: Session = Depends(get_db)) -> dic
 
     tenant = get_active_tenant(db, payload.tenant_code)
 
-    if local_demo_auth_enabled():
+    if settings.selected_auth_provider == "local":
+        if not settings.local_auth_enabled:
+            raise HTTPException(status_code=503, detail="Local authentication is not configured")
         duplicate_account = db.scalar(
             select(LocalAccount).where(
                 LocalAccount.tenant_id == tenant.id,
@@ -236,7 +238,7 @@ def register(payload: RegistrationRequest, db: Session = Depends(get_db)) -> dic
         return {
             "status": "registered",
             "message": "Your student account was created successfully.",
-            "access_token": create_demo_access_token(subject),
+            "access_token": create_local_access_token(subject),
             "token_type": "bearer",
             "role": "student",
             "tenant": tenant_payload(tenant),
@@ -295,8 +297,8 @@ def register(payload: RegistrationRequest, db: Session = Depends(get_db)) -> dic
 
 @router.post("/confirm-registration")
 def confirm_registration(payload: ConfirmRegistrationRequest, db: Session = Depends(get_db)) -> dict[str, str]:
-    if local_demo_auth_enabled():
-        raise HTTPException(status_code=404, detail="Cognito confirmation is not enabled in local demo mode")
+    if settings.selected_auth_provider == "local":
+        raise HTTPException(status_code=404, detail="Email confirmation is not configured for local accounts")
     intent = db.scalar(select(RegistrationIntent).where(RegistrationIntent.email == payload.email))
     if intent is None:
         raise HTTPException(status_code=404, detail="Registration was not found")
@@ -326,8 +328,8 @@ def complete_cognito_registration(
     payload: CompleteRegistrationRequest,
     db: Session = Depends(get_db),
 ) -> dict[str, bool]:
-    if local_demo_auth_enabled():
-        raise HTTPException(status_code=404, detail="Cognito registration is not enabled in local demo mode")
+    if settings.selected_auth_provider == "local":
+        raise HTTPException(status_code=404, detail="External identity registration is disabled")
     claims = decode_cognito_id_token(payload.id_token)
     email = normalize_email(str(claims.get("email", "")))
     if claims.get("email_verified") is not True:
@@ -362,9 +364,65 @@ def complete_cognito_registration(
     return {"completed": True}
 
 
-@router.post("/demo-login")
+@router.post("/login")
+def login(payload: DemoLoginRequest, db: Session = Depends(get_db)) -> dict:
+    """Authenticate a tenant-scoped CampusCloud account with its own password."""
+    if settings.selected_auth_provider != "local" or not settings.local_auth_enabled:
+        raise HTTPException(status_code=503, detail="Local authentication is not configured")
+
+    tenant = get_active_tenant(db, payload.tenant_code)
+    account = db.scalar(
+        select(LocalAccount).where(
+            LocalAccount.tenant_id == tenant.id,
+            LocalAccount.email == payload.email,
+        )
+    )
+    if account is not None and verify_password(payload.password, account.password_hash):
+        subject = f"local:{account.id}"
+        membership = db.scalar(
+            select(Membership).where(
+                Membership.subject == subject,
+                Membership.tenant_id == tenant.id,
+                Membership.status == "active",
+            )
+        )
+    elif account is None and local_demo_auth_enabled() and hmac.compare_digest(payload.password, settings.demo_auth_password or ""):
+        subject = DEMO_ADMIN_SUBJECTS.get(payload.email, payload.email)
+        membership = db.scalar(
+            select(Membership).where(
+                Membership.subject == subject,
+                Membership.tenant_id == tenant.id,
+                Membership.status == "active",
+            )
+        )
+        if membership is None:
+            membership = db.scalar(
+                select(Membership)
+                .join(Tenant, Membership.tenant_id == Tenant.id)
+                .where(
+                    Membership.subject == subject,
+                    Membership.role == "platform_admin",
+                    Membership.status == "active",
+                    Tenant.status == "active",
+                )
+            )
+    else:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Email or password is incorrect")
+
+    if membership is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Email or password is incorrect")
+
+    return {
+        "access_token": create_local_access_token(subject),
+        "token_type": "bearer",
+        "role": membership.role,
+        "tenant": tenant_payload(tenant),
+    }
+
+
+@router.post("/demo-login", include_in_schema=False)
 def demo_login(payload: DemoLoginRequest, db: Session = Depends(get_db)) -> dict:
-    """Authenticate a local account or one of the pre-seeded local demo identities."""
+    """Compatibility sign-in for seeded development identities only."""
     if not local_demo_auth_enabled():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Local demo sign-in is not enabled")
 
@@ -418,7 +476,7 @@ def demo_login(payload: DemoLoginRequest, db: Session = Depends(get_db)) -> dict
             role = "platform_admin"
 
     return {
-        "access_token": create_demo_access_token(subject),
+        "access_token": create_local_access_token(subject),
         "token_type": "bearer",
         "role": role,
         "tenant": tenant_payload(tenant),

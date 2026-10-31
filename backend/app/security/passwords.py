@@ -6,9 +6,9 @@ import os
 
 _SCRYPT_N = 1 << 15
 _SCRYPT_R = 8
-_SCRYPT_P = 1
+_SCRYPT_P = 3
 _KEY_LENGTH = 32
-_MAX_MEMORY = 64 * 1024 * 1024
+_MAX_MEMORY = 128 * 1024 * 1024
 
 
 def hash_password(password: str) -> str:
@@ -36,7 +36,13 @@ def verify_password(password: str, encoded: str) -> bool:
     try:
         algorithm, n_text, r_text, p_text, salt_text, digest_text = encoded.split("$")
         n, r, p = int(n_text), int(r_text), int(p_text)
-        if algorithm != "scrypt" or n not in {1 << 14, 1 << 15, 1 << 16} or r != 8 or p != 1:
+        supported_parameters = {
+            (1 << 14, 1), (1 << 14, 5),
+            (1 << 15, 1), (1 << 15, 3),
+            (1 << 16, 1), (1 << 16, 2),
+            (1 << 17, 1),
+        }
+        if algorithm != "scrypt" or (n, p) not in supported_parameters or r != 8:
             return False
         salt = base64.urlsafe_b64decode(salt_text.encode("ascii"))
         expected = base64.urlsafe_b64decode(digest_text.encode("ascii"))

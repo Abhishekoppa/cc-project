@@ -10,7 +10,10 @@ from jwt import PyJWKClient, PyJWKClientConnectionError, PyJWKClientError
 from app.core.config import settings
 
 bearer = HTTPBearer(auto_error=False)
-DEMO_TOKEN_ISSUER = "campuscloud-local-demo"
+LOCAL_TOKEN_ISSUER = "campuscloud-local-auth"
+LOCAL_TOKEN_AUDIENCE = "campuscloud-api"
+# Temporary compatibility name for existing development tests and integrations.
+DEMO_TOKEN_ISSUER = LOCAL_TOKEN_ISSUER
 
 
 @dataclass(frozen=True)
@@ -77,18 +80,19 @@ def decode_cognito_id_token(token: str) -> dict[str, Any]:
     return claims
 
 
-def create_demo_access_token(subject: str) -> str:
-    """Sign a short-lived token only in explicitly enabled development or staging."""
-    secret = settings.demo_auth_secret
-    if not settings.local_demo_auth_enabled:
-        raise HTTPException(status_code=404, detail="Local demo sign-in is not enabled")
+def create_local_access_token(subject: str) -> str:
+    """Create a short-lived first-party access token for a local account."""
+    secret = settings.auth_signing_secret
+    if not settings.local_auth_enabled or not secret:
+        raise HTTPException(status_code=503, detail="Local authentication is not configured")
     now = datetime.now(timezone.utc)
     return jwt.encode(
         {
             "sub": subject,
-            "iss": DEMO_TOKEN_ISSUER,
+            "iss": LOCAL_TOKEN_ISSUER,
+            "aud": LOCAL_TOKEN_AUDIENCE,
             "iat": now,
-            "exp": now + timedelta(minutes=30),
+            "exp": now + timedelta(minutes=settings.auth_token_ttl_minutes),
             "token_use": "access",
         },
         secret,
@@ -96,20 +100,28 @@ def create_demo_access_token(subject: str) -> str:
     )
 
 
-def decode_demo_access_token(token: str) -> dict[str, Any]:
-    secret = settings.demo_auth_secret
-    if not secret:
-        raise HTTPException(status_code=503, detail="Local demo sign-in is not configured")
+def decode_local_access_token(token: str) -> dict[str, Any]:
+    secret = settings.auth_signing_secret
+    if not settings.local_auth_enabled or not secret:
+        raise HTTPException(status_code=503, detail="Local authentication is not configured")
     try:
-        return jwt.decode(
+        claims = jwt.decode(
             token,
             secret,
             algorithms=["HS256"],
-            issuer=DEMO_TOKEN_ISSUER,
-            options={"require": ["exp", "iat", "iss", "sub", "token_use"]},
+            issuer=LOCAL_TOKEN_ISSUER,
+            options={"verify_aud": False, "require": ["exp", "iat", "iss", "sub", "token_use"]},
         )
     except jwt.PyJWTError as exc:
-        raise HTTPException(status_code=401, detail="Invalid or expired development token") from exc
+        raise HTTPException(status_code=401, detail="Invalid or expired access token") from exc
+    if claims.get("aud") not in {None, LOCAL_TOKEN_AUDIENCE}:
+        raise HTTPException(status_code=401, detail="Access token is not valid for this application")
+    return claims
+
+
+# Backwards-compatible aliases for older development integrations.
+create_demo_access_token = create_local_access_token
+decode_demo_access_token = decode_local_access_token
 
 
 def get_current_principal(
@@ -119,11 +131,12 @@ def get_current_principal(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Bearer token required")
 
     token = credentials.credentials
-    # Demo identities are limited to explicitly opted-in development/staging environments.
-    if settings.local_demo_auth_enabled:
-        claims = decode_demo_access_token(token)
+    if settings.selected_auth_provider == "local":
+        if not settings.local_auth_enabled:
+            raise HTTPException(status_code=503, detail="Local authentication is not configured")
+        claims = decode_local_access_token(token)
         if claims.get("token_use") != "access":
-            raise HTTPException(status_code=401, detail="Invalid development token")
+            raise HTTPException(status_code=401, detail="Invalid access token")
         return CurrentPrincipal(subject=claims["sub"], claims=claims)
 
     claims = decode_cognito_access_token(token)
